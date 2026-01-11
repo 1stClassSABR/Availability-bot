@@ -13,7 +13,6 @@ intents = discord.Intents.default()
 intents.members = True
 bot = discord.Bot(intents=intents)
 
-# session_id -> session data
 sessions = {}
 
 def generate_session_id():
@@ -21,7 +20,7 @@ def generate_session_id():
 
 # ================= EMBED =================
 
-def build_embed(session, bot, closed=False):
+def build_embed(session, bot):
     channel = bot.get_channel(int(session["channel_id"]))
     if not channel:
         return None
@@ -40,14 +39,10 @@ def build_embed(session, bot, closed=False):
         elif status == "unavailable":
             declined.append(member.mention)
 
-    title = session["title"]
-    if closed:
-        title += " 🔒 (Closed)"
-
     embed = Embed(
-        title=title,
-        description=session["description"] or " ",
-        color=0xe74c3c if closed else 0x2ecc71
+        title=f"📅 **{session['title']}**",
+        description=f"📝 {session['description']}",
+        color=0x2ecc71
     )
 
     embed.add_field(
@@ -66,8 +61,7 @@ def build_embed(session, bot, closed=False):
         inline=False
     )
 
-    if closed:
-        embed.set_footer(text="This session is closed. Voting disabled.")
+    embed.set_footer(text="Click a button below to vote")
 
     return embed
 
@@ -81,7 +75,6 @@ class AvailabilityModal(ui.Modal):
             label="Session title",
             placeholder="Pro Clubs Session"
         )
-
         self.desc_input = ui.InputText(
             label="Description",
             placeholder="Vote if you will attend",
@@ -99,7 +92,6 @@ class AvailabilityModal(ui.Modal):
             "title": self.title_input.value,
             "description": self.desc_input.value or "Vote if you will attend",
             "statuses": {},
-            "closed": False,
             "message_id": None
         }
 
@@ -110,7 +102,7 @@ class AvailabilityModal(ui.Modal):
         sessions[session_id]["message_id"] = str(msg.id)
 
         await interaction.response.send_message(
-            "✅ Availability session created.",
+            " Availability session created.✅",
             ephemeral=True
         )
 
@@ -123,13 +115,8 @@ class AvailabilityView(ui.View):
 
     async def vote(self, interaction, status):
         session = sessions.get(self.session_id)
-        if session["closed"]:
-            return await interaction.response.send_message(
-                "❌ This session is closed.",
-                ephemeral=True
-            )
-
         session["statuses"][str(interaction.user.id)] = status
+
         embed = build_embed(session, bot)
         await interaction.message.edit(embed=embed, view=self)
         await interaction.response.defer()
@@ -146,6 +133,7 @@ class AvailabilityView(ui.View):
     async def unavailable(self, button, interaction):
         await self.vote(interaction, "unavailable")
 
+    # 🔔 FIXED REMINDER
     @ui.button(label="🔔 Reminder", style=ButtonStyle.primary, row=1)
     async def reminder(self, button, interaction):
         if not interaction.user.guild_permissions.administrator:
@@ -158,24 +146,31 @@ class AvailabilityView(ui.View):
         channel = interaction.channel
 
         members = [m for m in channel.members if not m.bot]
-        no_response = [m for m in members if str(m.id) not in session["statuses"]]
 
-        if not no_response:
+        no_response = [m for m in members if str(m.id) not in session["statuses"]]
+        unsure_users = [
+            channel.guild.get_member(int(uid))
+            for uid, status in session["statuses"].items()
+            if status == "unsure"
+        ]
+
+        targets = list({m for m in no_response + unsure_users if m})
+
+        if not targets:
             return await interaction.response.send_message(
-                "✅ Everyone already voted.",
+                " No one to remind.✅",
                 ephemeral=True
             )
 
-        msg = (
-            "🔔 **Reminder:** Please vote if you'll be present!\n\n"
-            + " ".join(m.mention for m in no_response)
+        await channel.send(
+            " **Reminder 🔔:** Please confirm your availability!\n\n"
+            + " ".join(m.mention for m in targets)
         )
 
-        await channel.send(msg)
-        await interaction.response.send_message("🔔 Reminder sent.", ephemeral=True)
+        await interaction.response.send_message(" Reminder sent.🔔", ephemeral=True)
 
-    @ui.button(label="🔒 Close session", style=ButtonStyle.secondary, row=1)
-    async def close(self, button, interaction):
+    @ui.button(label="🔄 Reset votes", style=ButtonStyle.secondary, row=1)
+    async def reset(self, button, interaction):
         if not interaction.user.guild_permissions.administrator:
             return await interaction.response.send_message(
                 "❌ Admins only.",
@@ -183,77 +178,15 @@ class AvailabilityView(ui.View):
             )
 
         session = sessions.get(self.session_id)
-        session["closed"] = True
+        session["statuses"].clear()
 
-        embed = build_embed(session, bot, closed=True)
-
-        for child in self.children:
-            child.disabled = True
-
+        embed = build_embed(session, bot)
         await interaction.message.edit(embed=embed, view=self)
-        await interaction.response.send_message(
-            "🔒 Session closed.",
-            ephemeral=True
-        )
-
-# ================= CONTEXT MENU EDIT =================
-
-class EditAvailabilityModal(ui.Modal):
-    def __init__(self, session):
-        super().__init__(title="Edit availability")
-
-        self.session = session
-
-        self.title_input = ui.InputText(
-            label="Session title",
-            value=session["title"]
-        )
-
-        self.desc_input = ui.InputText(
-            label="Description",
-            value=session["description"],
-            required=False
-        )
-
-        self.add_item(self.title_input)
-        self.add_item(self.desc_input)
-
-    async def callback(self, interaction: discord.Interaction):
-        self.session["title"] = self.title_input.value
-        self.session["description"] = self.desc_input.value or " "
-
-        channel = interaction.channel
-        message = await channel.fetch_message(int(self.session["message_id"]))
-
-        embed = build_embed(self.session, bot, closed=self.session["closed"])
-        await message.edit(embed=embed)
 
         await interaction.response.send_message(
-            "✅ Availability updated.",
+            "🔄 All votes have been reset.",
             ephemeral=True
         )
-
-@bot.message_command(name="Edit availability")
-async def edit_availability(interaction: discord.Interaction, message: discord.Message):
-    if not interaction.user.guild_permissions.administrator:
-        return await interaction.response.send_message(
-            "❌ Admins only.",
-            ephemeral=True
-        )
-
-    session = None
-    for s in sessions.values():
-        if s.get("message_id") == str(message.id):
-            session = s
-            break
-
-    if not session:
-        return await interaction.response.send_message(
-            "❌ This is not an availability message.",
-            ephemeral=True
-        )
-
-    await interaction.response.send_modal(EditAvailabilityModal(session))
 
 # ================= PANEL =================
 
@@ -275,9 +208,9 @@ class CreatePanel(ui.View):
 
 @bot.event
 async def on_ready():
-    print(f"✅ Logged in as {bot.user}")
+    print(f" Logged in as {bot.user} ✅")
 
-# ================= SLASH COMMAND =================
+# ================= COMMAND =================
 
 @bot.slash_command(name="send_availability_panel")
 async def send_panel(ctx):
@@ -288,7 +221,7 @@ async def send_panel(ctx):
     )
 
     await ctx.channel.send(embed=embed, view=CreatePanel())
-    await ctx.respond("✅ Panel sent.", ephemeral=True)
+    await ctx.respond(" Panel sent.✅", ephemeral=True)
 
 # ================= RUN =================
 
