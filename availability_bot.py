@@ -257,7 +257,7 @@ class EditAvailabilityModal(ui.Modal):
             ephemeral=True
         )
 
-@bot.message_command(name="Edit availability", guild_ids=[1456061431119347715])  # Keep for now, but slash is alternative
+@bot.message_command(name="Edit availability", guild_ids=[1456061431119347715, 812723567686320168])  # Keep for now, but slash is alternative
 async def edit_availability(interaction: discord.Interaction, message: discord.Message):
     if not has_permission(interaction.user):
         return await interaction.response.send_message(
